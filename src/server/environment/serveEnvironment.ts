@@ -426,6 +426,8 @@ export interface ServeEnvironmentOptions {
   readonly source: EnvironmentSource;
   readonly host: string;
   readonly port: number;
+  /** Operator-declared Host/Origin names; a non-loopback bind refuses to serve without them. */
+  readonly allowedHosts?: readonly string[];
   readonly signal?: AbortSignal;
   /** Served name; defaults to the manifest's environment name. */
   readonly environmentName?: string;
@@ -477,6 +479,9 @@ export const serveEnvironment = async (
   const served = await serveStreamableHttp({
     host,
     port,
+    ...(options.allowedHosts === undefined
+      ? {}
+      : { allowedHosts: options.allowedHosts }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     createMcpServer: () => createEnvironmentMcpServer(name, tools, answer),
     routes: environmentRoutes(

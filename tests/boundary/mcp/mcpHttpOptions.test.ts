@@ -116,3 +116,63 @@ describe("MCP_HOST and MCP_PORT", () => {
     expect(projected).not.toContain("65536");
   });
 });
+
+describe("MCP_ALLOWED_HOSTS", () => {
+  it("parses comma-separated allowlist text and lets an explicit value win", () => {
+    expect(
+      parseMcpHttpEndpoint({ MCP_ALLOWED_HOSTS: "rea.lan, 10.0.0.5" }),
+    ).toEqual({
+      ok: true,
+      value: {
+        host: "127.0.0.1",
+        port: 0,
+        allowedHosts: ["rea.lan", "10.0.0.5"],
+      },
+    });
+    expect(
+      parseMcpHttpEndpoint(
+        { MCP_ALLOWED_HOSTS: "env.example" },
+        { allowedHosts: ["flag.example"] },
+      ),
+    ).toEqual({
+      ok: true,
+      value: { host: "127.0.0.1", port: 0, allowedHosts: ["flag.example"] },
+    });
+  });
+
+  it("rejects an empty or blank allowlist by setting name without echoing it", () => {
+    for (const text of ["", "  ", "rea.lan,,10.0.0.5"]) {
+      const result = parseMcpHttpEndpoint({ MCP_ALLOWED_HOSTS: text });
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.error.settings.map(({ setting }) => setting)).toEqual([
+        "MCP_ALLOWED_HOSTS",
+      ]);
+      expect(JSON.stringify(projectAnalysisError(result.error))).toContain(
+        "MCP_ALLOWED_HOSTS",
+      );
+    }
+  });
+
+  it("accepts --allowed-hosts with either flag spelling and rejects empty entries", () => {
+    expect(
+      parseMcpHttpArguments(["--http", "--allowed-hosts=rea.lan, 10.0.0.5"]),
+    ).toEqual({ ok: true, allowedHosts: ["rea.lan", "10.0.0.5"] });
+    expect(
+      parseMcpHttpArguments(["--http", "--allowed-hosts", "rea.lan"]),
+    ).toEqual({ ok: true, allowedHosts: ["rea.lan"] });
+    for (const text of ["", " ", "rea.lan,,10.0.0.5"])
+      expect(
+        parseMcpHttpArguments(["--http", `--allowed-hosts=${text}`]),
+      ).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("--allowed-hosts"),
+      });
+  });
+
+  it("lists --allowed-hosts and MCP_ALLOWED_HOSTS in the rendered help", () => {
+    const help = renderMcpHttpHelp();
+    expect(help).toContain("--allowed-hosts");
+    expect(help).toContain("MCP_ALLOWED_HOSTS");
+  });
+});

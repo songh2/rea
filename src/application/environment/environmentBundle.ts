@@ -20,6 +20,8 @@ export const BUNDLE_BASE_IMAGE = `node:${PACKAGE_METADATA.pinnedNodeVersion}-boo
 
 /** The port the agentenv framework maps for an MCP server env; it sets the host but not the port. */
 export const BUNDLE_MCP_PORT = 18765;
+/** Host names the exported env container is addressed by: the published loopback port and the compose service name. */
+export const BUNDLE_ALLOWED_HOSTS = "127.0.0.1,localhost";
 
 /** Name of the packed CLI inside the env folder when a tarball is exported. */
 export const BUNDLE_TARBALL_NAME = "rea-agents.tgz";
@@ -131,11 +133,19 @@ const READINESS_PROBE_LAYER =
   "RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*";
 
 /** The Dockerfile text: pinned base image, readiness probe interpreter, pinned CLI, listener defaults, non-root user. */
-export const bundleDockerfile = (source: EnvironmentPackageSource): string =>
+export const bundleDockerfile = (
+  source: EnvironmentPackageSource,
+  name?: string,
+): string =>
   [
     `FROM ${BUNDLE_BASE_IMAGE}`,
     `ENV MCP_HOST=0.0.0.0`,
     `ENV MCP_PORT=${String(BUNDLE_MCP_PORT)}`,
+    // The env container binds outside loopback for the framework's published port and
+    // gateway proxy, so it names the hosts they address it by; the gateway reaches it
+    // as the compose service name (the environment name) and host-side clients go
+    // through the published loopback port.
+    `ENV MCP_ALLOWED_HOSTS=${BUNDLE_ALLOWED_HOSTS}${name === undefined ? "" : `,${name}`}`,
     READINESS_PROBE_LAYER,
     installLine(source),
     // Owned by the runtime user, so a private host umask cannot make the inputs unreadable.
@@ -370,7 +380,7 @@ export const planEnvironmentBundle = (
       },
       {
         path: `${envFolder}/Dockerfile`,
-        content: bundleDockerfile(options.packageSource),
+        content: bundleDockerfile(options.packageSource, name),
       },
       {
         path: `artifacts/check_${name}/verify.py`,

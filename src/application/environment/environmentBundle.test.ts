@@ -118,6 +118,9 @@ describe("planEnvironmentBundle", () => {
     expect(lines).toContain("ENV MCP_HOST=0.0.0.0");
     expect(lines).toContain("ENV MCP_PORT=18765");
     expect(lines).toContain(
+      `ENV MCP_ALLOWED_HOSTS=127.0.0.1,localhost,grafana-example`,
+    );
+    expect(lines).toContain(
       "RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*",
     );
     expect(lines).toContain(

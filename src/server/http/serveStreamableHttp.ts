@@ -47,6 +47,8 @@ export interface StreamableHttpRoute {
 export interface ServeStreamableHttpOptions {
   readonly host: string;
   readonly port: number;
+  /** Operator-declared Host/Origin names; a non-loopback bind refuses to serve without them. */
+  readonly allowedHosts?: readonly string[];
   /** Cancellation during listener startup; later shutdown remains owned by close(). */
   readonly signal?: AbortSignal;
   /** Called once; the instance serves every session in turn on a fresh transport. */
@@ -552,7 +554,30 @@ export const serveStreamableHttp = async (
       throw new TypeError("MCP HTTP listener has no TCP address");
     url = endpointUrl(bound);
     origin = new URL(url).origin;
-    allowedHosts = hostHeaderAllowlist(host, bound.address);
+    const loopbackHosts = hostHeaderAllowlist(host, bound.address);
+    if (loopbackHosts !== undefined) {
+      allowedHosts = loopbackHosts;
+    } else {
+      // A non-loopback bind is remotely reachable, so Host (DNS rebinding) and
+      // Origin (browser pages) stay gated on operator-declared names only.
+      // Every declared name must parse; silently ignoring one would start the
+      // listener narrower than the operator asked and surface only as a
+      // client connection failure.
+      const declared: string[] = [];
+      for (const entry of options.allowedHosts ?? []) {
+        const name = normalizedHostname(entry);
+        if (name === undefined)
+          throw new Error(
+            `Refusing to serve ${bound.address} outside loopback with the invalid allowed host ${JSON.stringify(entry)} in MCP_ALLOWED_HOSTS (or --allowed-hosts); every entry must be a host name or IP address, then retry`,
+          );
+        if (!declared.includes(name)) declared.push(name);
+      }
+      if (declared.length === 0)
+        throw new Error(
+          `Refusing to serve ${bound.address} outside loopback without an operator-declared host allowlist; set MCP_ALLOWED_HOSTS (or --allowed-hosts) to every host name clients will use, then retry`,
+        );
+      allowedHosts = declared;
+    }
   } catch (cause: unknown) {
     await prepareTransportShutdown().catch(() => undefined);
     throw new StreamableHttpListenError(cause);
