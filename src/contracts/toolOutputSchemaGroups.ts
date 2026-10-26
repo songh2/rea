@@ -2,10 +2,8 @@ import {
   nativeAddressListSchema,
   nativeObservationSourceSchemas,
 } from "../domain/native/nativeObservation.js";
-import { nativeObservationSummaryViewResultSchemas } from "../domain/analysisView/analysisView.js";
-import { literalFeatureMatchSchema } from "../domain/native/literalFeatureMatch.js";
-import { byteEntropySchema } from "../domain/native/byteEntropy.js";
 import {
+  nativeObservationSummaryViewResultSchemas,
   byteEntropySummaryViewResultSchema,
   nativeFunctionMatchingSummaryViewResultSchema,
   nativeFunctionSummaryViewResultSchema,
@@ -17,6 +15,8 @@ import {
   managedArtifactSummaryViewResultSchema,
   managedMemberSummaryViewResultSchema,
 } from "../domain/analysisView/analysisView.js";
+import { literalFeatureMatchSchema } from "../domain/native/literalFeatureMatch.js";
+import { byteEntropySchema } from "../domain/native/byteEntropy.js";
 import { nativeFunctionMatchingSchema } from "../domain/native/functionMatching.js";
 import { nativeByteReadSchema } from "../domain/native/nativeByteRead.js";
 import { analysisDetailOutputSchemaOf } from "./analysisDetail.js";
