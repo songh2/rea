@@ -40,6 +40,7 @@ import {
 } from "./ClientRegistrationEnvironment.js";
 
 import { refreshClientRegistration } from "./ClientRegistration.js";
+import { recommendedMcpToolTimeoutMs } from "../mcpStartupPolicy.js";
 
 import { PRODUCT_IDENTITY } from "../identity.js";
 import { snapshotEnvironment } from "../process/snapshotEnvironment.js";
@@ -770,16 +771,26 @@ const clientConfigurationDesired = async (
   const launcher =
     command.length === 0 ? [PRODUCT_IDENTITY.cliBinary, "mcp"] : command;
   if (format === "dsh") {
-    const validated = clientRegistrationEnvironment(
+    // Cordis registrations keep unevaluated expressions for settings unrelated
+    // to the deadline, so dsh does not gate on the provider request budget:
+    // only the timeout inputs require literals, and the wrapper's budget
+    // resolver is deliberately left unset.
+    const validated = await clientRegistrationEnvironmentDetailsWithBudget(
       effective,
       providerEnvironment,
+      "effective",
+      undefined,
     );
     if (!validated.ok) throw validated.error;
     const desired = (
       parsed === undefined
         ? new DshCordisDocument("")
         : dshDocument(parsed.document)
-    ).desired(launcher, providerEnvironment);
+    ).desired(
+      launcher,
+      providerEnvironment,
+      recommendedMcpToolTimeoutMs(validated.value.timeoutInputs),
+    );
     if (!desired.ok) throw desired.error;
     return desired.value;
   }

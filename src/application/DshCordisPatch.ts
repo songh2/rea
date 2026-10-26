@@ -279,6 +279,7 @@ export class DshCordisDocument {
   desired(
     command: readonly string[],
     overrides: Readonly<Record<string, string>>,
+    toolCallTimeoutMs?: number,
   ): Result<Record<string, unknown>, ConfigurationError> {
     if (this.#editabilityError !== undefined)
       return err(this.#editabilityError);
@@ -291,6 +292,11 @@ export class DshCordisDocument {
     const desired = { ...this.config, ...dshClientRegistrationEntry(command) };
     delete desired.env;
     if (Object.keys(env).length > 0) desired.env = env;
+    if (
+      toolCallTimeoutMs !== undefined &&
+      !retainsCallerToolTimeout(this.config)
+    )
+      desired.toolCallTimeoutMs = toolCallTimeoutMs;
     return ok(desired);
   }
 
@@ -393,6 +399,12 @@ export class DshCordisDocument {
     // Caller nodes keep their tags and spelling; only literal launcher values change.
     for (const key of LAUNCHER_KEYS)
       this.#yaml.setValue(config, key, desired[key]);
+    if (typeof desired.toolCallTimeoutMs === "number")
+      this.#yaml.setValue(
+        config,
+        "toolCallTimeoutMs",
+        desired.toolCallTimeoutMs,
+      );
     const env = this.#map(this.#yaml.field(sourceConfig, "env"));
     const desiredEnv = desired.env;
     if (isRecord(desiredEnv)) {
@@ -466,6 +478,19 @@ export const serializeDshDocument = (
     throw new ConfigurationError("Missing Cordis edit plan");
   return document.cordis.source.serialize(document.cordis.desired);
 };
+/**
+ * Whether the caller's own tool timeout survives a refresh: a positive finite
+ * literal. Any other value, including an unevaluated Cordis expression or a
+ * malformed literal, is replaced by the recommended deadline, matching how
+ * registration-status expressions are repaired elsewhere.
+ */
+const retainsCallerToolTimeout = (
+  config: Record<string, unknown> | undefined,
+): boolean => {
+  const value = config?.toolCallTimeoutMs;
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+};
+
 export const dshClientRegistrationEntry = (
   command: readonly string[],
   environment: Readonly<Record<string, string>> = {},

@@ -12,6 +12,7 @@ import {
 
 import { readClientRegistrationStatuses } from "../../../src/application/ClientRegistrationStatus.js";
 import { npxRegistrationCommand } from "../../../src/application/ClientRegistrationIdentity.js";
+import { ok } from "../../../src/domain/result.js";
 import {
   configureClientConfiguration,
   inspectClientConfiguration,
@@ -166,6 +167,7 @@ describe("DeepSeek Harness Cordis patch registration", () => {
               transport: "stdio",
               command: command[0],
               args: command.slice(1),
+              toolCallTimeoutMs: 450_000,
             },
           },
         ],
@@ -399,6 +401,7 @@ describe("DeepSeek Harness registration identity", () => {
               transport: "stdio",
               command: command[0],
               args: command.slice(1),
+              toolCallTimeoutMs: 450_000,
             },
           },
         ],
@@ -442,6 +445,7 @@ describe("DeepSeek Harness repair boundaries", () => {
               transport: "stdio",
               command: command[0],
               args: command.slice(1),
+              toolCallTimeoutMs: 450_000,
             },
           },
         ],
@@ -712,6 +716,162 @@ describe("DeepSeek Harness registration state", () => {
     expect(
       (await configureClientConfiguration(client, {}, command)).status,
     ).toBe("unchanged");
+  });
+});
+
+describe("DeepSeek Harness tool call timeout", () => {
+  it("writes the recommended tool call timeout into a fresh registration", async () => {
+    const { client } = await harnessClient();
+    expect(
+      (await configureClientConfiguration(client, {}, command)).status,
+    ).toBe("configured");
+    expect(
+      cordisPatches(await readFile(client.configPath, "utf8"))[0]?.insert?.[0]
+        ?.config?.toolCallTimeoutMs,
+    ).toBe(450_000);
+  });
+
+  it("derives a deadline beyond Node's timer ceiling for an overridden provider startup", async () => {
+    const { client } = await harnessClient();
+    expect(
+      (
+        await configureClientConfiguration(
+          client,
+          {
+            REA_ANALYSIS_PROVIDER: "ida",
+            REA_GHIDRA_STARTUP_TIMEOUT_MS: "2147483647",
+          },
+          command,
+        )
+      ).status,
+    ).toBe("configured");
+    expect(
+      cordisPatches(await readFile(client.configPath, "utf8"))[0]?.insert?.[0]
+        ?.config?.toolCallTimeoutMs,
+    ).toBe(2_147_603_647);
+  });
+
+  it("preserves a caller-selected positive timeout through a refresh", async () => {
+    const { home, client } = await harnessClient();
+    const entry = canonicalEntry();
+    await writeFile(
+      client.configPath,
+      stringifyYaml([
+        {
+          insert: [
+            {
+              ...entry,
+              config: { ...entry.config, toolCallTimeoutMs: 900_000 },
+            },
+          ],
+        },
+      ]),
+    );
+    expect(
+      (await configureClientConfiguration(client, {}, command)).status,
+    ).toBe("unchanged");
+    expect(
+      cordisPatches(await readFile(client.configPath, "utf8"))[0]?.insert?.[0]
+        ?.config?.toolCallTimeoutMs,
+    ).toBe(900_000);
+    expect(await dshStatus(home)).toMatchObject({ state: "aligned" });
+  });
+
+  it("advises when a configured timeout is shorter than the provider allowance", async () => {
+    const { home, client } = await harnessClient();
+    const entry = canonicalEntry();
+    await writeFile(
+      client.configPath,
+      stringifyYaml([
+        {
+          insert: [
+            {
+              ...entry,
+              config: { ...entry.config, toolCallTimeoutMs: 300_000 },
+            },
+          ],
+        },
+      ]),
+    );
+    expect(
+      (await configureClientConfiguration(client, {}, command)).status,
+    ).toBe("unchanged");
+    expect(await dshStatus(home)).toMatchObject({
+      state: "aligned",
+      advisory: expect.stringContaining("toolCallTimeoutMs = 450000 ms"),
+    });
+  });
+
+  it("repairs a registration without a tool timeout", async () => {
+    const { home, client } = await harnessClient();
+    await writeFile(
+      client.configPath,
+      `- insert:
+    - id: rea-mcp
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: rea
+        transport: stdio
+        command: ${command[0]}
+        args: [${command.slice(1).join(", ")}]
+`,
+    );
+    expect(await dshStatus(home)).toMatchObject({ state: "stale" });
+    expect(
+      (await configureClientConfiguration(client, {}, command)).status,
+    ).toBe("configured");
+    expect(
+      cordisPatches(await readFile(client.configPath, "utf8"))[0]?.insert?.[0]
+        ?.config?.toolCallTimeoutMs,
+    ).toBe(450_000);
+    expect(await dshStatus(home)).toMatchObject({ state: "aligned" });
+    expect(
+      (await configureClientConfiguration(client, {}, command)).status,
+    ).toBe("unchanged");
+  });
+
+  it("repairs a malformed literal timeout with the recommended deadline", async () => {
+    const { client } = await harnessClient();
+    const entry = canonicalEntry();
+    await writeFile(
+      client.configPath,
+      stringifyYaml([
+        {
+          insert: [
+            {
+              ...entry,
+              config: { ...entry.config, toolCallTimeoutMs: '"450000"' },
+            },
+          ],
+        },
+      ]),
+    );
+    expect(
+      (await configureClientConfiguration(client, {}, command)).status,
+    ).toBe("configured");
+    expect(
+      cordisPatches(await readFile(client.configPath, "utf8"))[0]?.insert?.[0]
+        ?.config?.toolCallTimeoutMs,
+    ).toBe(450_000);
+  });
+
+  it("replaces an expression-backed timeout with the recommended literal", async () => {
+    const { home, client } = await harnessClient();
+    const document = parseDocument(
+      stringifyYaml([{ insert: [canonicalEntry()] }]),
+    );
+    const expression = document.createNode("process.env.REA_TOOL_TIMEOUT");
+    expression.tag = "tag:yaml.org,2002:js";
+    document.setIn([0, "insert", 0, "config", "toolCallTimeoutMs"], expression);
+    await writeFile(client.configPath, document.toString());
+    expect(
+      (await configureClientConfiguration(client, {}, command)).status,
+    ).toBe("configured");
+    expect(
+      cordisPatches(await readFile(client.configPath, "utf8"))[0]?.insert?.[0]
+        ?.config?.toolCallTimeoutMs,
+    ).toBe(450_000);
+    expect(await dshStatus(home)).toMatchObject({ state: "aligned" });
   });
 });
 
@@ -1076,6 +1236,46 @@ describe("DeepSeek Harness entry ownership", () => {
     expect(await readFile(client.configPath, "utf8")).toContain(
       "!!js process.env.GHIDRA_INSTALL_DIR",
     );
+  });
+});
+
+describe("DeepSeek Harness budget resolver expressions", () => {
+  it("keeps an environment expression while a budget resolver is supplied", async () => {
+    const { home, client } = await harnessClient();
+    await writeFile(
+      client.configPath,
+      `- insert:
+    - id: rea-mcp
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: rea
+        transport: stdio
+        command: stale-launcher
+        args: [mcp]
+        env:
+          GHIDRA_INSTALL_DIR: !!js process.env.GHIDRA_INSTALL_DIR
+`,
+    );
+    const budgetResolver = async () => ok(45_000);
+    // A supplied budget resolver still classifies the row instead of
+    // rejecting the expression-backed environment, because the deadline
+    // derivation only needs the timeout inputs as literals.
+    expect(
+      await readClientRegistrationStatuses(home, undefined, {
+        platform: process.platform,
+        environment: {},
+        resolveProviderRequestBudget: budgetResolver,
+      }),
+    ).toMatchObject([
+      expect.objectContaining({ client: "dsh", state: "stale" }),
+    ]);
+    expect(
+      (await configureClientConfiguration(client, {}, command, budgetResolver))
+        .status,
+    ).toBe("configured");
+    const text = await readFile(client.configPath, "utf8");
+    expect(text).toContain("!!js process.env.GHIDRA_INSTALL_DIR");
+    expect(text).not.toContain("stale-launcher");
   });
 });
 
@@ -1693,6 +1893,7 @@ const canonicalEntry = () => ({
     transport: "stdio",
     command: command[0],
     args: command.slice(1),
+    toolCallTimeoutMs: 450_000,
   },
 });
 
