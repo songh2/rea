@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { HOPPER_METADATA_TIMEOUT_MS } from "./HopperDownload.js";
 import {
   installMacHopper,
   type MacHopperBundleVerification,
@@ -24,9 +25,11 @@ class FakeMacHopperHost implements MacHopperInstallHost {
   installs = 0;
   opens = 0;
   replaces = false;
+  downloads: Array<{ url: string; timeoutMs: number | undefined }> = [];
 
-  download = (url: string) =>
-    Promise.resolve(
+  download = (url: string, options?: { readonly timeoutMs?: number }) => {
+    this.downloads.push({ url, timeoutMs: options?.timeoutMs });
+    return Promise.resolve(
       url.includes("files-api")
         ? {
             ok: true,
@@ -45,6 +48,7 @@ class FakeMacHopperHost implements MacHopperInstallHost {
           }
         : { ok: this.archiveOk, bytes: this.archive },
     );
+  };
   createTemporaryDirectory = () => Promise.resolve("/tmp/rea-hopper-test");
   createMountDirectory = () => Promise.resolve();
   writePackage = () => Promise.resolve();
@@ -101,6 +105,21 @@ describe("macOS Hopper installation", () => {
     expect(host.opens).toBe(1);
     expect(host.unmounts).toBe(1);
     expect(host.cleanups).toBe(1);
+  });
+
+  it("bounds the release feed by the metadata limit and the package by the download bounds", async () => {
+    const host = new FakeMacHopperHost();
+    await installMacHopper({}, host);
+    expect(host.downloads).toEqual([
+      {
+        url: expect.stringContaining("request=releases"),
+        timeoutMs: HOPPER_METADATA_TIMEOUT_MS,
+      },
+      {
+        url: "https://www.hopperapp.com:443/downloader/public/Hopper-demo.dmg",
+        timeoutMs: undefined,
+      },
+    ]);
   });
 
   it("preserves installation when macOS cannot open the installed app", async () => {
