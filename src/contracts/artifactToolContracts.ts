@@ -30,6 +30,12 @@ export const artifactInspectionInputSchema =
 /** Extraction needs no selector: it materializes every regular child file. */
 export const artifactExtractionInputSchema = z.strictObject({
   integrity_policy: artifactIntegrityPolicySchema,
+  dry_run: z
+    .boolean()
+    .exactOptional()
+    .describe(
+      "When true, validate destination admission, path collisions, and reader entries and return an extraction plan without creating destination files or directories.",
+    ),
 });
 
 /** Provider input containing the destination chosen by the local adapter. */

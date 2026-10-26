@@ -72,26 +72,68 @@ export const normalizeArtifactPath = (input: string): string => {
   return normalized;
 };
 
-/** Reject exact and same-spelling prefix collisions. Case-distinct names stay distinct. */
+/**
+ * Reject exact and same-spelling prefix collisions. Case-distinct names stay
+ * distinct unless destination case-folding rules are enabled.
+ */
+export type DestinationCaseSensitivity =
+  | "case-sensitive"
+  | "case-insensitive"
+  | "unknown";
+
 export class ArtifactPathRegistry {
-  readonly #root: PathTrieNode = { kind: undefined, children: new Map() };
+  readonly #root: PathTrieNode = {
+    kind: undefined,
+    children: new Map(),
+    spellingsByFold: new Map(),
+  };
+  readonly #caseInsensitive: boolean;
+
+  constructor(options: { readonly caseInsensitive?: boolean } = {}) {
+    this.#caseInsensitive = options.caseInsensitive === true;
+  }
 
   add(path: string, kind: ArtifactEntry["kind"]): void {
     if (!hasDestinationPath(kind)) return;
     const parts = path.split("/");
     let node = this.#root;
+    let prefix = "";
     for (const [index, part] of parts.entries()) {
+      const currentPath = prefix.length === 0 ? part : `${prefix}/${part}`;
       if (node.kind !== undefined && node.kind !== "directory")
         throw new ArtifactReaderFailure(
           "path",
           `Artifact prefix conflict: ${pathDiagnostic(path)}`,
         );
+      if (this.#caseInsensitive && !node.children.has(part)) {
+        const folded = asciiCaseFold(part);
+        const existing = (node.spellingsByFold.get(folded) ?? [])
+          .slice()
+          .sort(compareUnicodeCodePoints)[0];
+        if (existing !== undefined) {
+          throw new DestinationCaseCollisionFailure(
+            currentPath,
+            prefix.length === 0 ? existing : `${prefix}/${existing}`,
+          );
+        }
+      }
       let child = node.children.get(part);
       if (child === undefined) {
-        child = { kind: undefined, children: new Map() };
+        child = {
+          kind: undefined,
+          children: new Map(),
+          spellingsByFold: new Map(),
+        };
         node.children.set(part, child);
+        if (this.#caseInsensitive) {
+          const folded = asciiCaseFold(part);
+          const spellings = node.spellingsByFold.get(folded);
+          if (spellings === undefined) node.spellingsByFold.set(folded, [part]);
+          else spellings.push(part);
+        }
       }
       node = child;
+      prefix = currentPath;
       if (index === parts.length - 1) {
         if (node.kind !== undefined && node.kind !== kind)
           throw new ArtifactReaderFailure(
@@ -112,6 +154,7 @@ export class ArtifactPathRegistry {
 interface PathTrieNode {
   kind: DestinationEntryKind | undefined;
   readonly children: Map<string, PathTrieNode>;
+  readonly spellingsByFold: Map<string, string[]>;
 }
 
 interface CaseNode {
@@ -128,6 +171,30 @@ const emptyCaseNode = (): CaseNode => ({
 
 const englishCaseFold = (part: string): string =>
   part.toLocaleLowerCase("en-US");
+
+const asciiCaseFold = (part: string): string =>
+  part.replace(/[A-Z]/gu, (char) =>
+    String.fromCharCode(char.charCodeAt(0) + 0x20),
+  );
+
+const foldUnicodeCodePoint = (char: string): string => {
+  const upper = char.toUpperCase();
+  const singleUpper = [...upper].length === 1 ? upper : char;
+  const lower = singleUpper.toLowerCase();
+  return [...lower].length === 1 ? lower : singleUpper;
+};
+
+/**
+ * Fold a path segment using 1-to-1 simple Unicode case mapping without
+ * 1-to-many expansion. Used after an OS `EEXIST` failure to name the colliding
+ * directory entry, and in dry-run planning to detect non-ASCII or unknown-mount
+ * case folds whose destination table behavior is not observed without disk I/O.
+ */
+const unicodeCaseFold = (part: string): string => {
+  let folded = "";
+  for (const char of part) folded += foldUnicodeCodePoint(char);
+  return folded;
+};
 
 /**
  * Record English (en-US) Unicode case collisions on each affected occurrence.
@@ -182,7 +249,7 @@ const caseCollisionLimitation = (
 
 /**
  * Name the directory-listing spelling that differs from the requested segment
- * only by English (en-US) Unicode case. Exact matches are the same logical name.
+ * only by 1-to-1 Unicode case folding. Exact matches are the same logical name.
  */
 export const destinationCaseCollision = (
   requestedPath: string,
@@ -192,9 +259,9 @@ export const destinationCaseCollision = (
   const slash = requestedPath.lastIndexOf("/");
   const segment = slash < 0 ? requestedPath : requestedPath.slice(slash + 1);
   if (existingNames.includes(segment)) return undefined;
-  const folded = englishCaseFold(segment);
+  const folded = unicodeCaseFold(segment);
   const existing = existingNames
-    .filter((name) => englishCaseFold(name) === folded)
+    .filter((name) => unicodeCaseFold(name) === folded)
     .sort(compareUnicodeCodePoints)[0];
   if (existing === undefined) return undefined;
   const parent = slash < 0 ? "" : requestedPath.slice(0, slash + 1);
@@ -205,8 +272,22 @@ export const destinationCaseCollision = (
   );
 };
 
+/**
+ * Find destination paths that collide under 1-to-1 Unicode case folding.
+ */
+export const destinationCaseCollisions = (
+  paths: readonly string[],
+): ReadonlyMap<string, readonly CaseCollision[]> =>
+  caseCollisionsByFold(paths, unicodeCaseFold);
+
 const englishUnicodeCaseCollisions = (
   paths: readonly string[],
+): ReadonlyMap<string, readonly CaseCollision[]> =>
+  caseCollisionsByFold(paths, englishCaseFold);
+
+const caseCollisionsByFold = (
+  paths: readonly string[],
+  foldSegment: (part: string) => string,
 ): ReadonlyMap<string, readonly CaseCollision[]> => {
   const root = emptyCaseNode();
   for (const path of paths) {
@@ -215,7 +296,7 @@ const englishUnicodeCaseCollisions = (
     for (const part of path.split("/")) {
       let child = node.bySpelling.get(part);
       if (child === undefined) {
-        const folded = englishCaseFold(part);
+        const folded = foldSegment(part);
         const spellings = node.spellingsByFold.get(folded);
         if (spellings === undefined) node.spellingsByFold.set(folded, [part]);
         else spellings.push(part);
@@ -247,8 +328,7 @@ const englishUnicodeCaseCollisions = (
     for (const [spelling, child] of node.bySpelling) {
       const childPrefix =
         prefix === undefined ? spelling : `${prefix}/${spelling}`;
-      const spellings =
-        node.spellingsByFold.get(englishCaseFold(spelling)) ?? [];
+      const spellings = node.spellingsByFold.get(foldSegment(spelling)) ?? [];
       const other = spellings[0] === spelling ? spellings[1] : spellings[0];
       pending.push({
         node: child,

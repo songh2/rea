@@ -128,6 +128,80 @@ describe("artifact extraction", () => {
     ]);
   });
 });
+
+describe("artifact extraction dry-run", () => {
+  it("supports dry_run extraction planning and refuses existing destinations without creating files", async () => {
+    const root = await createTestTempDirectory("rea-extract-dry-run-boundary-");
+    const source = join(root, "source");
+    await mkdir(join(source, "nested"), { recursive: true });
+    await writeFile(join(source, "nested", "item.txt"), "hello world\n");
+    const targetValue = target(source, "directory");
+    const plannedOutput = join(root, "planned-output");
+
+    const dryResult = await new ArtifactProvider(process.env)
+      .createClient(targetValue)
+      .execute(
+        "extract_artifact",
+        artifactExtractionExecutionSchema.parse({
+          output_root: plannedOutput,
+          dry_run: true,
+        }),
+      );
+    if (!dryResult.ok) throw dryResult.error;
+    const parsedDry = artifactExtractionResultSchema.parse(
+      dryResult.value.result,
+    );
+    expect(parsedDry.dry_run).toBe(true);
+    expect(parsedDry.artifacts).toEqual([
+      expect.objectContaining({
+        relative_path: "nested/item.txt",
+        bytes_written: 0,
+        created: false,
+      }),
+    ]);
+    expect(parsedDry.plan).toMatchObject({
+      entries: [
+        expect.objectContaining({
+          logical_path: "nested",
+          entry_kind: "directory",
+          status: "unsupported",
+        }),
+        expect.objectContaining({
+          logical_path: "nested/item.txt",
+          entry_kind: "file",
+          status: "planned",
+          observed_bytes: 12,
+          declared_bytes: 12,
+        }),
+      ],
+      totals: {
+        planned_files: 1,
+        unsupported_entries: 1,
+        unresolved_entries: 0,
+        observed_bytes_estimate: 12,
+        declared_bytes_estimate: 12,
+        byte_totals_basis: "declared-and-observed-content-estimates",
+      },
+    });
+    await expect(access(plannedOutput)).rejects.toThrow();
+    expect(await readdir(root)).toEqual(["source"]);
+
+    await mkdir(plannedOutput);
+    const existingRefusal = await new ArtifactProvider(process.env)
+      .createClient(targetValue)
+      .execute(
+        "extract_artifact",
+        artifactExtractionExecutionSchema.parse({
+          output_root: plannedOutput,
+          dry_run: true,
+        }),
+      );
+    expect(existingRefusal).toMatchObject({
+      ok: false,
+      error: { _tag: "ArtifactOperationError", reason: "path" },
+    });
+  });
+});
 const inventory = async (targetValue: BinaryTarget) => {
   const result = await new ArtifactProvider(process.env)
     .createClient(targetValue)

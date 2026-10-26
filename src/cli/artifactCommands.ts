@@ -209,6 +209,12 @@ const registerExtractionCommand = (
         .enum(["fail", "record-and-continue"])
         .default("fail")
         .describe("Behavior when declared artifact integrity does not match"),
+      dryRun: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Plan and validate extraction paths, collisions, and byte estimates without creating files",
+        ),
     }),
     run: ({ args, options }) =>
       logCliCommand(logger, "extract-artifact", () =>
@@ -217,6 +223,7 @@ const registerExtractionCommand = (
           "extract_artifact",
           {
             integrity_policy: options.integrityPolicy,
+            ...(options.dryRun ? { dry_run: true } : {}),
             output_root: createArtifactExtractionDestination(),
           },
           logger,
