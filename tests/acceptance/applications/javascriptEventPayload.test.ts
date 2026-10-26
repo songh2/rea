@@ -162,3 +162,77 @@ cliTest(
   },
   120_000,
 );
+
+cliTest(
+  "traces retained empty event names and endpoints by their preserved values",
+  async ({ cli }) => {
+    const root = await createTestTempDirectory("rea-empty-seed-");
+    await writeFile(
+      join(root, "main.js"),
+      [
+        'import {EventEmitter} from "node:events";',
+        "const bus = new EventEmitter();",
+        'bus.on("", function emptyListener() { return 17; });',
+        'export const load = async () => (await fetch("")).json();',
+      ].join("\n"),
+    );
+    const analyzed = await cli.run({
+      arguments: [
+        "analyze-javascript-application",
+        root,
+        "--artifact-format",
+        "directory",
+        "--json",
+      ],
+      timeoutMs: 60_000,
+    });
+    expect(analyzed.exitCode, analyzed.stderr).toBe(0);
+    const application = toolContract(
+      "analyze_javascript_application",
+    ).outputSchema.parse(analyzed.json);
+    const graph = javascriptApplicationAnalysisResultSchema.parse(
+      application.normalized_result,
+    ).semantic_graph;
+    const retained = (
+      kinds: readonly string[],
+      property: string,
+    ): Set<string> =>
+      new Set(
+        graph.nodes
+          .filter(
+            (node) =>
+              kinds.includes(node.kind) && node.properties[property] === "",
+          )
+          .map((node) => node.node_id),
+      );
+    const emptyEvent = retained(["event", "listener"], "event_name");
+    const emptyEndpoint = retained(["request", "response"], "endpoint");
+    expect(emptyEvent.size).toBe(2);
+    expect(emptyEndpoint.size).toBeGreaterThan(0);
+    for (const [seed, expected] of [
+      [{ kind: "event", name: "" }, emptyEvent],
+      [{ kind: "endpoint", value: "" }, emptyEndpoint],
+    ] as const) {
+      const request = join(root, `${seed.kind}-query.json`);
+      await writeFile(
+        request,
+        JSON.stringify({
+          application,
+          query: { seed, direction: "forward-influence" },
+        }),
+      );
+      const traced = await cli.run({
+        arguments: ["trace-javascript-semantics", request, "--json"],
+        timeoutMs: 60_000,
+      });
+      expect(traced.exitCode, `${seed.kind}: ${traced.stdout}`).toBe(0);
+      const trace = javaScriptSemanticTraceResultSchema.parse(
+        toolContract("trace_javascript_semantics").outputSchema.parse(
+          traced.json,
+        ).normalized_result,
+      );
+      expect(new Set(trace.seed_node_ids), seed.kind).toEqual(expected);
+    }
+  },
+  120_000,
+);
