@@ -242,6 +242,7 @@ class Differ {
     at: {
       readonly key?: string;
       readonly own?: boolean;
+      readonly idList?: boolean;
       readonly clockKey?: string | undefined;
     } = {},
     generation?: Generation,
@@ -276,6 +277,7 @@ class Differ {
       (typeof env === "string" || typeof env === "number")
     ) {
       const mapsAsId =
+        at.idList === true ||
         (field !== undefined && ID_FIELD.test(field)) ||
         this.#inCollection(pointer, at) ||
         (typeof live === "string" &&
@@ -360,19 +362,29 @@ class Differ {
       envOrder.some((right, index) => index > 0 && right < envOrder[index - 1]!)
     )
       this.add({ category: "order", pointer });
-    for (const [left, right] of pairs)
+    // An id-list element renames by the probe's mapping, as sameItems does, so
+    // an element that only renamed is not reported as a change.
+    const field = pointer.slice(pointer.lastIndexOf("/") + 1);
+    for (const [left, right] of pairs) {
+      const item = live[left]!;
+      const idList =
+        ((typeof item === "number" || typeof item === "string") &&
+          ID_LIST_FIELD.test(field)) ||
+        (typeof item === "string" && this.map.isStateReference(item, field));
       this.value(
-        live[left]!,
+        item,
         env[right]!,
         `${pointer}/${String(left)}`,
         {
           own,
+          idList,
           clockKey,
         },
         generation === undefined
           ? undefined
           : { ...generation, pointer: `${generation.pointer}/*` },
       );
+    }
   }
 
   /** Arrays of scalars holding the same items in another order differ only in order, as sets an application returns unordered do. */
@@ -511,6 +523,7 @@ class Differ {
       readonly key?: string;
       readonly own?: boolean;
       readonly keyed?: boolean;
+      readonly idList?: boolean;
       readonly clockKey?: string | undefined;
     } = {},
     generation?: Generation,

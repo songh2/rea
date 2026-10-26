@@ -791,6 +791,43 @@ describe("scalar sets of mapped ids", () => {
     ]);
     expect(compared.normalised.ids).toBe(2);
   });
+
+  it("maps each id when one element genuinely changed, reporting only the real change", () => {
+    const map = new IdMap();
+    map.learn(101, 1);
+    map.learn(102, 2);
+    const compared = compareAnswers(
+      { status: 200, body: { kind: "json", value: { ids: [101, 102] } } },
+      { status: 200, body: { kind: "json", value: { ids: [1, 9] } } },
+      map,
+    );
+    // 101 -> 1 is the mapping, not a change; only 102 -> 9 differs, shown with
+    // the original live value rather than its mapped form.
+    expect(compared.differences).toEqual([
+      { category: "value", pointer: "/ids/1", live: "102", env: "9" },
+    ]);
+    expect(compared.normalised.ids).toBe(1);
+  });
+
+  it("maps the surviving ids when the list length also differs", () => {
+    const map = new IdMap();
+    map.learn(101, 1);
+    map.learn(102, 2);
+    const compared = compareAnswers(
+      { status: 200, body: { kind: "json", value: { ids: [101, 102] } } },
+      { status: 200, body: { kind: "json", value: { ids: [1] } } },
+      map,
+    );
+    expect(compared.differences).toEqual([
+      {
+        category: "length",
+        pointer: "/ids",
+        live: "2 items",
+        env: "1 items (1 paired)",
+      },
+    ]);
+    expect(compared.normalised.ids).toBe(1);
+  });
 });
 
 describe("ids two collections reuse", () => {
